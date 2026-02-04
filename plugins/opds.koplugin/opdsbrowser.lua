@@ -1006,7 +1006,15 @@ end
 -- Returns user selected or last opened folder
 function OPDSBrowser:getCurrentDownloadDir()
     if self.sync then
-        return self.settings.sync_dir
+        local base_dir = self.settings.sync_dir
+        if self.sync_server and self.sync_server.use_subdirectory then
+            -- Create safe subdirectory name from catalog title
+            local subdir = util.replaceAllInvalidChars(self.root_catalog_title)
+            local full_path = base_dir .. "/" .. subdir
+            util.makePath(full_path)  -- ensure directory exists
+            return full_path
+        end
+        return base_dir
     else
         return G_reader_settings:readSetting("download_dir") or G_reader_settings:readSetting("lastdir")
     end
