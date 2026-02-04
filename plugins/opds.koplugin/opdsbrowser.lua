@@ -270,7 +270,7 @@ function OPDSBrowser:addEditCatalog(item)
         title = _("Add OPDS catalog")
     end
 
-    local dialog, check_button_raw_names, check_button_sync_catalog
+    local dialog, check_button_raw_names, check_button_sync_catalog, check_button_use_subdirectory, check_button_delete_missing
     dialog = MultiInputDialog:new{
         title = title,
         fields = fields,
@@ -289,6 +289,8 @@ function OPDSBrowser:addEditCatalog(item)
                         local new_fields = dialog:getFields()
                         new_fields[5] = check_button_raw_names.checked or nil
                         new_fields[6] = check_button_sync_catalog.checked or nil
+                        new_fields[7] = check_button_use_subdirectory.checked or nil
+                        new_fields[8] = check_button_delete_missing.checked or nil
                         self:editCatalogFromInput(new_fields, item)
                         UIManager:close(dialog)
                     end,
@@ -306,8 +308,20 @@ function OPDSBrowser:addEditCatalog(item)
         checked = item and item.sync,
         parent = dialog,
     }
+    check_button_use_subdirectory = CheckButton:new{
+        text = _("Use subdirectory for this catalog"),
+        checked = item and item.use_subdirectory,
+        parent = dialog,
+    }
+    check_button_delete_missing = CheckButton:new{
+        text = _("Delete books not in catalog"),
+        checked = item and item.delete_missing,
+        parent = dialog,
+    }
     dialog:addWidget(check_button_raw_names)
     dialog:addWidget(check_button_sync_catalog)
+    dialog:addWidget(check_button_use_subdirectory)
+    dialog:addWidget(check_button_delete_missing)
     UIManager:show(dialog)
     dialog:onShowKeyboard()
 end
@@ -356,6 +370,8 @@ function OPDSBrowser:editCatalogFromInput(fields, item, no_refresh)
         password  = fields[4] ~= "" and fields[4] or nil,
         raw_names = fields[5],
         sync      = fields[6],
+        use_subdirectory = fields[7],
+        delete_missing = fields[8],
     }
     local new_item = buildRootEntry(new_server)
     local new_idx, itemnumber
