@@ -63,6 +63,7 @@ function OPDS:init()
             server.delete_missing = false
         end
     end
+    self.updated = true
 
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
