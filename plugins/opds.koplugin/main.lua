@@ -53,6 +53,17 @@ function OPDS:init()
     self.downloads = self.opds_settings:readSetting("downloads", {})
     self.settings = self.opds_settings:readSetting("settings", {})
     self.pending_syncs = self.opds_settings:readSetting("pending_syncs", {})
+
+    -- Migrate existing servers to add new fields with safe defaults
+    for _, server in ipairs(self.servers) do
+        if server.use_subdirectory == nil then
+            server.use_subdirectory = false
+        end
+        if server.delete_missing == nil then
+            server.delete_missing = false
+        end
+    end
+
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
 end
