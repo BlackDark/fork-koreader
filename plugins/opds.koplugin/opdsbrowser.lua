@@ -225,6 +225,8 @@ local function buildRootEntry(server)
         raw_names  = server.raw_names, -- use server raw filenames for download
         searchable = server.url and server.url:match("%%s") and true or false,
         sync       = server.sync,
+        use_subdirectory = server.use_subdirectory,
+        delete_missing = server.delete_missing,
     }
 end
 
