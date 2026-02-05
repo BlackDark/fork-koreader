@@ -1076,6 +1076,17 @@ function OPDSBrowser:downloadFile(local_path, remote_url, username, password, ca
     end
     if code == 200 then
         logger.dbg("File downloaded to", local_path)
+
+        -- Track this download if in sync mode with metadata
+        if self.sync and self.current_book_metadata then
+            self:trackDownloadedFile(
+                self.current_book_metadata.catalog,
+                local_path,
+                self.current_book_metadata.book_id,
+                remote_url
+            )
+        end
+
         if caller_callback then
             caller_callback(local_path)
         end
@@ -1734,9 +1745,17 @@ function OPDSBrowser:downloadPendingSyncs()
                     if lfs.attributes(item.file) and not self.sync_force then
                         table.insert(dupe_list, item)
                     else
+                        -- Set current book metadata for tracking
+                        self.current_book_metadata = {
+                            catalog = item.catalog,
+                            book_id = item.book_id,
+                        }
+
                         if self:downloadFile(item.file, item.url, item.username, item.password) then
                             dl[item.file] = true
                         end
+
+                        self.current_book_metadata = nil
                     end
                 end
             end
