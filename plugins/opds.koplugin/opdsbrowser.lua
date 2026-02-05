@@ -1866,4 +1866,97 @@ function OPDSBrowser:trackDownloadedFile(catalog_url, file_path, book_id, book_u
     logger.dbg("Tracked file:", file_path, "for catalog:", catalog_url)
 end
 
+-- Remove books that are no longer in the catalog feed
+function OPDSBrowser:cleanupMissingBooks(catalog_url, current_feed_books)
+    if not self.sync_server or not self.sync_server.delete_missing then
+        return
+    end
+
+    local sync_dir = self:getCurrentDownloadDir()
+
+    -- Strategy 1: SUBDIRECTORY MODE (simpler, more thorough)
+    if self.sync_server.use_subdirectory then
+        -- Build set of expected filenames from feed
+        local feed_files = {}
+        for _, book in ipairs(current_feed_books) do
+            if book.file_path then
+                feed_files[book.file_path] = true
+            end
+        end
+
+        -- Check all files in the subdirectory
+        local files_to_delete = {}
+        for entry in lfs.dir(sync_dir) do
+            if entry ~= "." and entry ~= ".." then
+                local file_path = sync_dir .. "/" .. entry
+                local attr = lfs.attributes(file_path)
+                -- Only delete regular files, not directories
+                if attr and attr.mode == "file" then
+                    if not feed_files[file_path] then
+                        table.insert(files_to_delete, file_path)
+                    end
+                end
+            end
+        end
+
+        -- Delete orphaned files
+        for _, file_path in ipairs(files_to_delete) do
+            logger.info("Deleting missing book from subdirectory:", file_path)
+            os.remove(file_path)
+        end
+
+        if #files_to_delete > 0 then
+            UIManager:show(InfoMessage:new{
+                text = T(N_("1 book removed (no longer in catalog)",
+                           "%1 books removed (no longer in catalog)",
+                           #files_to_delete), #files_to_delete),
+                timeout = 3,
+            })
+        end
+
+    -- Strategy 2: SHARED DIRECTORY MODE (metadata-based, conservative)
+    else
+        -- SAFETY: If no tracking data exists, don't delete anything
+        if not self.catalog_files or not self.catalog_files[catalog_url] then
+            logger.info("No tracking data for catalog, skipping cleanup (safe fallback)")
+            return
+        end
+
+        -- Build set of book IDs currently in the feed
+        local feed_book_ids = {}
+        for _, book in ipairs(current_feed_books) do
+            if book.book_id then
+                feed_book_ids[book.book_id] = true
+            end
+        end
+
+        -- Check tracked files for this catalog
+        local files_to_delete = {}
+        for file_path, metadata in pairs(self.catalog_files[catalog_url]) do
+            if metadata.book_id and not feed_book_ids[metadata.book_id] then
+                if lfs.attributes(file_path) then
+                    table.insert(files_to_delete, file_path)
+                end
+            end
+        end
+
+        -- Delete files and remove from tracking
+        for _, file_path in ipairs(files_to_delete) do
+            logger.info("Deleting missing book:", file_path)
+            os.remove(file_path)
+            self.catalog_files[catalog_url][file_path] = nil
+        end
+
+        if #files_to_delete > 0 then
+            self:saveCatalogFileTracking()
+            UIManager:show(InfoMessage:new{
+                text = T(N_("1 book removed (no longer in catalog)",
+                           "%1 books removed (no longer in catalog)",
+                           #files_to_delete), #files_to_delete),
+                timeout = 3,
+            })
+        end
+    end
+end
+
 return OPDSBrowser
