@@ -1666,4 +1666,16 @@ function util.which(command, path)
     end
 end
 
+--- Create a stable hash from a URL for use as an identifier
+-- @string url The URL to hash
+-- @treturn string A hash string suitable for use as an identifier
+function util.getURLHash(url)
+    -- Simple but stable hash function
+    local hash = 0
+    for i = 1, #url do
+        hash = (hash * 31 + string.byte(url, i)) % 2147483647
+    end
+    return string.format("url_%d", hash)
+end
+
 return util
