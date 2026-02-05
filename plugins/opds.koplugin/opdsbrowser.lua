@@ -71,6 +71,7 @@ function OPDSBrowser:init()
         self:showOPDSMenu()
     end
     self.facet_groups = nil -- Initialize facet groups storage
+    self.catalog_files = nil -- Initialize catalog file tracking (loaded lazily)
     Menu.init(self) -- call parent's init()
 end
 
@@ -1820,4 +1821,49 @@ function OPDSBrowser:downloadPendingSyncs()
         UIManager:show(textviewer)
     end
 end
+
+-- Load catalog file tracking from persistent storage
+function OPDSBrowser:loadCatalogFileTracking()
+    if self.catalog_files then
+        return -- already loaded
+    end
+    local DataStorage = require("datastorage")
+    local tracking_file = DataStorage:getSettingsDir() .. "/opds_sync_tracking.lua"
+    local LuaSettings = require("luasettings")
+    local settings = LuaSettings:open(tracking_file)
+    self.catalog_files = settings:readSetting("catalog_files") or {}
+    logger.dbg("Loaded catalog file tracking:", self.catalog_files)
+end
+
+-- Save catalog file tracking to persistent storage
+function OPDSBrowser:saveCatalogFileTracking()
+    if not self.catalog_files then
+        return
+    end
+    local DataStorage = require("datastorage")
+    local tracking_file = DataStorage:getSettingsDir() .. "/opds_sync_tracking.lua"
+    local LuaSettings = require("luasettings")
+    local settings = LuaSettings:open(tracking_file)
+    settings:saveSetting("catalog_files", self.catalog_files)
+    settings:flush()
+    logger.dbg("Saved catalog file tracking")
+end
+
+-- Track a downloaded file with its catalog and book ID
+function OPDSBrowser:trackDownloadedFile(catalog_url, file_path, book_id, book_url)
+    if not self.catalog_files then
+        self:loadCatalogFileTracking()
+    end
+    if not self.catalog_files[catalog_url] then
+        self.catalog_files[catalog_url] = {}
+    end
+    self.catalog_files[catalog_url][file_path] = {
+        book_id = book_id,
+        download_time = os.time(),
+        url = book_url,
+    }
+    self:saveCatalogFileTracking()
+    logger.dbg("Tracked file:", file_path, "for catalog:", catalog_url)
+end
+
 return OPDSBrowser
