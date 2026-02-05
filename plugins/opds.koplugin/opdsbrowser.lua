@@ -1576,6 +1576,9 @@ function OPDSBrowser:fillPendingSyncs(server)
     self.sync_server_list       = self.sync_server_list or {}
     self.sync_max_dl            = self.settings.sync_max_dl or 50
 
+    -- Load catalog file tracking for deletion support
+    self:loadCatalogFileTracking()
+
     local file_list
     local file_str = self.settings.filetypes
     local new_last_download = nil
@@ -1588,6 +1591,8 @@ function OPDSBrowser:fillPendingSyncs(server)
     end
     local sync_list = self:getSyncDownloadList()
     if sync_list then
+        local current_feed_books = {}  -- Track books in current feed for cleanup
+
         for i, entry in ipairs(sync_list) do
             -- for project gutenberg
             local sub_table = {}
@@ -1611,6 +1616,10 @@ function OPDSBrowser:fillPendingSyncs(server)
                     if not file_str or file_list and file_list[filetype] then
                         local filename = self:getFileName(entry)
                         local download_path = self:getLocalDownloadPath(filename, filetype, link.href)
+
+                        -- Extract book ID (use entry ID from feed or hash of URL)
+                        local book_id = entry.id or util.getURLHash(link.href)
+
                         if dl_count <= self.sync_max_dl then -- Append only max_dl entries... may still have sync backlog
                             table.insert(self.pending_syncs, {
                                 file = download_path,
@@ -1618,14 +1627,25 @@ function OPDSBrowser:fillPendingSyncs(server)
                                 username = self.root_catalog_username,
                                 password = self.root_catalog_password,
                                 catalog = server.url,
+                                book_id = book_id,
                             })
                             dl_count = dl_count + 1
                         end
+
+                        -- Track this book as part of current feed
+                        table.insert(current_feed_books, {
+                            book_id = book_id,
+                            file_path = download_path,
+                        })
+
                         break
                     end
                 end
             end
         end
+
+        -- Cleanup missing books after building download list
+        self:cleanupMissingBooks(server.url, current_feed_books)
     end
     self.sync_server_list[server.url] = true
     if new_last_download then
