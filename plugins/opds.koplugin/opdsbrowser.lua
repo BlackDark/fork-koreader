@@ -30,6 +30,18 @@ local _ = require("gettext")
 local N_ = _.ngettext
 local T = ffiUtil.template
 
+-- Backward-compatible URL hash helper (older builds may lack util.getURLHash).
+local getURLHash = util.getURLHash
+if not getURLHash then
+    getURLHash = function(url_str)
+        local hash = 0
+        for i = 1, #url_str do
+            hash = (hash * 31 + string.byte(url_str, i)) % 2147483647
+        end
+        return string.format("url_%d", hash)
+    end
+end
+
 -- cache catalog parsed from feed xml
 local CatalogCache = Cache:new{
     -- Make it 20 slots, with no storage space constraints
@@ -366,16 +378,21 @@ end
 
 -- Saves catalog properties from input dialog
 function OPDSBrowser:editCatalogFromInput(fields, item, no_refresh)
-    local new_server = {
-        title     = fields[1],
-        url       = fields[2]:match("^%a+://") and fields[2] or "http://" .. fields[2],
-        username  = fields[3] ~= "" and fields[3] or nil,
-        password  = fields[4] ~= "" and fields[4] or nil,
-        raw_names = fields[5],
-        sync      = fields[6],
-        use_subdirectory = fields[7],
-        delete_missing = fields[8],
-    }
+    local new_server = {}
+    if item then
+        -- Preserve existing fields (e.g., last_download) when editing.
+        for k, v in pairs(self.servers[item.idx - 1] or {}) do
+            new_server[k] = v
+        end
+    end
+    new_server.title     = fields[1]
+    new_server.url       = fields[2]:match("^%a+://") and fields[2] or "http://" .. fields[2]
+    new_server.username  = fields[3] ~= "" and fields[3] or nil
+    new_server.password  = fields[4] ~= "" and fields[4] or nil
+    new_server.raw_names = fields[5]
+    new_server.sync      = fields[6]
+    new_server.use_subdirectory = fields[7]
+    new_server.delete_missing = fields[8]
     local new_item = buildRootEntry(new_server)
     local new_idx, itemnumber
     if item then
@@ -1545,6 +1562,7 @@ end
 function OPDSBrowser:checkSyncDownload(idx)
     if self.settings.sync_dir then
         self.sync = true
+        self.sync_removed_count = 0
         local info = InfoMessage:new{
             text = _("Synchronizing lists…"),
         }
@@ -1565,9 +1583,11 @@ function OPDSBrowser:checkSyncDownload(idx)
                 self:downloadPendingSyncs()
             end)
         else
-            UIManager:show(InfoMessage:new{
-                text = _("Up to date!"),
-            })
+            if not self.sync_removed_count or self.sync_removed_count == 0 then
+                UIManager:show(InfoMessage:new{
+                    text = _("Up to date!"),
+                })
+            end
         end
         self.sync = false
     else
@@ -1601,62 +1621,81 @@ function OPDSBrowser:fillPendingSyncs(server)
         end
     end
     local sync_list = self:getSyncDownloadList()
-    if sync_list then
+    local cleanup_list = sync_list
+    if self.sync_server.delete_missing and not cleanup_list then
+        cleanup_list = self:getSyncDownloadList(nil, {
+            ignore_last_download = true,
+            return_nil_on_empty = true,
+        })
+    end
+    if sync_list or cleanup_list then
         local current_feed_books = {}  -- Track books in current feed for cleanup
-
-        for i, entry in ipairs(sync_list) do
-            -- for project gutenberg
-            local sub_table = {}
-            local item
-            if entry.url then
-                sub_table = self:getSyncDownloadList(entry.url)
+        local function process_entries(entry_list, add_pending)
+            if not entry_list then
+                return
             end
-            if #sub_table > 0 then
-                -- The first element seems to be most compatible. Second element has most options
-                item = sub_table[2]
-            else
-                item = entry
-            end
-            for j, link in ipairs(item.acquisitions) do
-                -- Only save first link in case of several file types
-                if i == 1 and j == 1 then
-                    new_last_download = link.href
+            for i, entry in ipairs(entry_list) do
+                -- for project gutenberg
+                local sub_table = {}
+                local item
+                if entry.url then
+                    sub_table = self:getSyncDownloadList(entry.url, { ignore_last_download = true })
                 end
-                local filetype = self.getFiletype(link)
-                if filetype then
-                    if not file_str or file_list and file_list[filetype] then
-                        local filename = self:getFileName(entry)
-                        local download_path = self:getLocalDownloadPath(filename, filetype, link.href)
+                if #sub_table > 0 then
+                    -- The first element seems to be most compatible. Second element has most options
+                    item = sub_table[2]
+                else
+                    item = entry
+                end
+                for j, link in ipairs(item.acquisitions) do
+                    -- Only save first link in case of several file types
+                    if add_pending and i == 1 and j == 1 then
+                        new_last_download = link.href
+                    end
+                    local filetype = self.getFiletype(link)
+                    if filetype then
+                        if not file_str or file_list and file_list[filetype] then
+                            local filename = self:getFileName(entry)
+                            local download_path = self:getLocalDownloadPath(filename, filetype, link.href)
 
-                        -- Extract book ID (use entry ID from feed or hash of URL)
-                        local book_id = entry.id or util.getURLHash(link.href)
+                            -- Extract book ID (use entry ID from feed or hash of URL)
+                            local book_id = entry.id or getURLHash(link.href)
 
-                        if dl_count <= self.sync_max_dl then -- Append only max_dl entries... may still have sync backlog
-                            table.insert(self.pending_syncs, {
-                                file = download_path,
-                                url = link.href,
-                                username = self.root_catalog_username,
-                                password = self.root_catalog_password,
-                                catalog = server.url,
+                            if add_pending and dl_count <= self.sync_max_dl then -- Append only max_dl entries... may still have sync backlog
+                                table.insert(self.pending_syncs, {
+                                    file = download_path,
+                                    url = link.href,
+                                    username = self.root_catalog_username,
+                                    password = self.root_catalog_password,
+                                    catalog = server.url,
+                                    book_id = book_id,
+                                })
+                                dl_count = dl_count + 1
+                            end
+
+                            -- Track this book as part of current feed
+                            table.insert(current_feed_books, {
                                 book_id = book_id,
+                                file_path = download_path,
                             })
-                            dl_count = dl_count + 1
+
+                            break
                         end
-
-                        -- Track this book as part of current feed
-                        table.insert(current_feed_books, {
-                            book_id = book_id,
-                            file_path = download_path,
-                        })
-
-                        break
                     end
                 end
             end
         end
 
-        -- Cleanup missing books after building download list
-        self:cleanupMissingBooks(server.url, current_feed_books)
+        process_entries(sync_list, true)
+        if cleanup_list ~= sync_list then
+            process_entries(cleanup_list, false)
+        end
+
+        -- Cleanup missing books after building feed list (if enabled)
+        if self.sync_server.delete_missing and cleanup_list then
+            local removed = self:cleanupMissingBooks(server.url, current_feed_books) or 0
+            self.sync_removed_count = (self.sync_removed_count or 0) + removed
+        end
     end
     self.sync_server_list[server.url] = true
     if new_last_download then
@@ -1667,16 +1706,18 @@ function OPDSBrowser:fillPendingSyncs(server)
 end
 
 -- Get list of books to download bigger than sync_max_dl
-function OPDSBrowser:getSyncDownloadList(url_arg)
+function OPDSBrowser:getSyncDownloadList(url_arg, opts)
+    opts = opts or {}
     local sync_table = {}
     local fetch_url = url_arg or self.sync_server.url
     local sub_table
     local up_to_date = false
-    while #sync_table < self.sync_max_dl and not up_to_date do
+    local max_items = opts.max_items or self.sync_max_dl
+    while #sync_table < max_items and not up_to_date do
         sub_table = self:genItemTableFromURL(fetch_url)
-        -- timeout
+        -- timeout or fetch failure
         if #sub_table == 0 then
-            return sync_table
+            return opts.return_nil_on_empty and nil or sync_table
         end
         local count = 1
         local acquisitions_empty = false
@@ -1699,7 +1740,7 @@ function OPDSBrowser:getSyncDownloadList(url_arg)
         else
             first_href = sub_table[1].acquisitions[1].href
         end
-        if first_href == self.sync_server.last_download and not self.sync_force then
+        if not opts.ignore_last_download and first_href == self.sync_server.last_download and not self.sync_force then
             return nil
         end
         local href
@@ -1714,7 +1755,7 @@ function OPDSBrowser:getSyncDownloadList(url_arg)
                 href = entry.acquisitions[1].href
             end
             if href then
-                if href == self.sync_server.last_download and not self.sync_force then
+                if not opts.ignore_last_download and href == self.sync_server.last_download and not self.sync_force then
                     up_to_date = true
                     break
                 else
@@ -1908,7 +1949,7 @@ end
 -- Remove books that are no longer in the catalog feed
 function OPDSBrowser:cleanupMissingBooks(catalog_url, current_feed_books)
     if not self.sync_server or not self.sync_server.delete_missing then
-        return
+        return 0
     end
 
     local sync_dir = self:getCurrentDownloadDir()
@@ -1952,13 +1993,14 @@ function OPDSBrowser:cleanupMissingBooks(catalog_url, current_feed_books)
                 timeout = 3,
             })
         end
+        return #files_to_delete
 
     -- Strategy 2: SHARED DIRECTORY MODE (metadata-based, conservative)
     else
         -- SAFETY: If no tracking data exists, don't delete anything
         if not self.catalog_files or not self.catalog_files[catalog_url] then
             logger.info("No tracking data for catalog, skipping cleanup (safe fallback)")
-            return
+            return 0
         end
 
         -- Build set of book IDs currently in the feed
@@ -1995,6 +2037,7 @@ function OPDSBrowser:cleanupMissingBooks(catalog_url, current_feed_books)
                 timeout = 3,
             })
         end
+        return #files_to_delete
     end
 end
 
